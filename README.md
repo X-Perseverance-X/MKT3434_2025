@@ -1,46 +1,86 @@
-# ⚙️ MKT3434_2025
+# Machine Learning Course GUI
 
-**MKT3434 Course of Dept. Mechatronics Eng. at YTU instructed by Ertugrul Bayraktar**
-
----
-
-## 🚀 Overview
-
-This repository provides a base GUI framework for students to develop and integrate machine learning methods. The GUI is built using PyQt6 and supports various classical machine learning and deep learning techniques. Students will extend this GUI by adding necessary functionalities over time.
+Bu proje, makine öğrenimi modellerini ve derin öğrenme yapılarını görselleştirmek, eğitim süreçlerini yönetmek ve veri ön işleme adımlarını uygulamak için kapsamlı bir GUI (Grafiksel Kullanıcı Arayüzü) sağlar. Uygulama, klasik makine öğrenimi algoritmalarından derin öğrenmeye kadar geniş bir yelpazede model eğitimi ve değerlendirmesi yapmanızı kolaylaştırır.
 
 ---
 
-## 📚 Long-Term Homework Instructions
+## İçindekiler
 
-Students are required to modify and enhance this GUI incrementally every three weeks. The objective is to build a fully functional and improved machine learning GUI.
-
-### 🎯 Key Requirements:
-
-*   **Insert Necessary Methods:** Integrate missing machine learning methods within the provided GUI framework.
-*   **Enhance the GUI:** The default interface is provided, but students are encouraged to improve usability and design.
-*   **Ensure Data and Method Appropriateness:** The datasets and algorithms should be compatible within the GUI structure.
-*   **Implement Training and Testing Processes:** Correctly implement model training and evaluation workflows.
-*   **Regular Submissions:** Submit updates every three weeks through Google Classroom for this course.
-
----
-
-## 🤝 Repository and Collaboration
-
-Students should fork this repository and develop their versions.
-
-Regular commits and documentation updates are expected.
+- [Özellikler](#özellikler)
+- [Kurulum](#kurulum)
+- [Kullanım](#kullanım)
+  - [Veri Yönetimi](#veri-yönetimi)
+  - [Görselleştirme](#görselleştirme)
+  - [Model Eğitimi](#model-eğitimi)
+  - [Derin Öğrenme Sekmesi](#derin-öğrenme-sekmesi)
+  - [Ek Özellikler](#ek-özellikler)
+- [Bağımlılıklar](#bağımlılıklar)
+- [Proje Yapısı](#proje-yapısı)
+- [Sorun Giderme](#sorun-giderme)
+- [Katkıda Bulunanlar](#katkıda-bulunanlar)
+- [Lisans](#lisans)
 
 ---
 
-## 🏁 Getting Started
+## Özellikler
 
-### ⚙️ Prerequisites:
+- **Veri Yönetimi:**
+  - Öntanımlı veri setleri: Iris, Boston Housing, Breast Cancer.
+  - Kullanıcının CSV formatında kendi veri setini yüklemesi.
+  - Ölçekleme seçenekleri: Standard Scaling, Min-Max Scaling, Robust Scaling.
+  - Veri setini eğitim ve test olarak ayırma oranı belirleme.
 
-Ensure you have the following installed:
+- **Görselleştirme:**
+  - Ham verinin 3D scatter plot ile görselleştirilmesi.
+  - Histogramlar ile verinin dağılımının incelenmesi.
+  - X, Y ve Z eksenleri için öznitelik seçimi.
+  - Model tahminlerinin 3D grafik üzerinde gerçek değerlerle karşılaştırılması.
+  - Model performans metriklerinin (hata, doğruluk, karışıklık matrisi vb.) metin kutusunda gösterimi.
 
-*   Python 3.8+
+- **Model Eğitimi:**
+  - Klasik makine öğrenimi algoritmaları: Linear Regression, Logistic Regression, Naive Bayes, Support Vector Machine, Decision Tree, Random Forest, K-Nearest Neighbors.
+  - Her algoritma için parametre ayarlarının kullanıcı tarafından belirlenebilmesi.
+  - Kayıp fonksiyonu ayarları: Sınıflandırma (Cross Entropy, Binary Cross Entropy, Hinge Loss) ve regresyon (MSE, MAE, Huber Loss) seçenekleri.
+  - Eğitim tamamlandığında, modelin tahminleri, görselleştirmeleri ve performans metriklerinin güncellenmesi.
 
-### 📦 Required dependencies:
+- **Derin Öğrenme Sekmesi:**
+  - Çok katmanlı algılayıcı (MLP), Konvolüsyonel Sinir Ağı (CNN) ve Tekrarlayan Sinir Ağı (RNN) için yapılandırma seçenekleri.
+  - Dinamik katman ekleme: Dense, Conv2D, MaxPooling2D, Flatten, Dropout katmanları.
+  - Eğitim parametreleri: Batch size, epochs, öğrenme oranı.
+  - Eğitim sürecinde ilerleme çubuğu ve eğitim geçmişi görselleştirmesi.
 
-```bash
-pip install numpy pandas matplotlib PyQt6 scikit-learn tensorflow torch torchvision torchaudio opencv-python opencv-contrib-python scipy fastai kornia
+- **Ek Özellikler:**
+  - Sekmeli yapı: Klasik ML, Derin Öğrenme, Boyut İndirgeme ve Pekiştirmeli Öğrenme konularına özel sekmeler.
+  - Hata ve uyarı mesajlarının gösterimi.
+  - Kullanıcı dostu, kompakt ve düzenli arayüz.
+
+---
+
+## Kurulum
+
+### Gereksinimler
+- numpy>=1.21.0
+- pandas>=1.3.0
+- PyQt6>=6.4.0
+- matplotlib>=3.4.0
+- scikit-learn>=1.0.0
+- tensorflow>=2.8.0
+- scipy>=1.7.0
+
+
+- **Python 3.7+**
+- Aşağıdaki Python paketlerine ihtiyaç vardır:
+  - `numpy`
+  - `pandas`
+  - `scikit-learn`
+  - `matplotlib`
+  - `PyQt6`
+  - `tensorflow` (ve `keras` modülü, TensorFlow 2.x ile birlikte gelir)
+
+### Kurulum Adımları
+
+1. Python ve pip’in sisteminizde kurulu olduğundan emin olun.
+2. Gerekli paketleri yüklemek için aşağıdaki komutu çalıştırın:
+   ```bash
+   pip install numpy pandas scikit-learn matplotlib PyQt6 tensorflow
+
