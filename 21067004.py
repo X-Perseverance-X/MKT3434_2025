@@ -21,6 +21,13 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import accuracy_score, mean_squared_error, confusion_matrix
+from sklearn.impute import SimpleImputer
+from sklearn.decomposition import PCA
+from sklearn.decomposition import TruncatedSVD
+from sklearn.manifold import TSNE
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.metrics import silhouette_score
+from sklearn.metrics import pairwise_distances
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers
 
@@ -81,6 +88,18 @@ class MLCourseGUI(QMainWindow):
         load_btn = QPushButton("Load Data")
         load_btn.setFixedHeight(25)  # Smaller height
         load_btn.clicked.connect(self.load_dataset)
+
+        # --- MISSING DATA HANDLING ---
+        missing_group = QGroupBox("Missing Data Handling")
+        missing_layout = QVBoxLayout()
+        self.missing_combo = QComboBox()
+        self.missing_combo.addItems([
+            "No Action",
+            "Mean Imputation"
+        ])
+        missing_layout.addWidget(QLabel("Handle missing values:"))
+        missing_layout.addWidget(self.missing_combo)
+        missing_group.setLayout(missing_layout)
         
         # Scaling options in a compact layout
         scaling_layout = QHBoxLayout()
@@ -92,23 +111,32 @@ class MLCourseGUI(QMainWindow):
         scaling_layout.addWidget(scaling_label)
         scaling_layout.addWidget(self.scaling_combo)
         
-        # Test split options in a compact layout
-        split_layout = QHBoxLayout()
-        split_layout.setSpacing(5)
-        split_label = QLabel("Split:")
-        split_label.setFixedWidth(50)
-        self.split_spin = QSpinBox()
-        self.split_spin.setRange(10, 40)
-        self.split_spin.setValue(20)
-        self.split_spin.setSuffix("%")
-        split_layout.addWidget(split_label)
-        split_layout.addWidget(self.split_spin)
+        # Split ratio and k-fold options in a compact layout
+        split_section = QHBoxLayout()
+        split_section.setSpacing(5)
+        # Split ratio ComboBox
+        self.split_combo = QComboBox()
+        self.split_combo.addItems([
+            "80-20 (Train-Test)",
+            "70-15-15 (Train-Val-Test)",
+            "60-20-20 (Train-Val-Test)"
+        ])
+        self.split_combo.setCurrentIndex(0)
+        split_section.addWidget(QLabel("Split Ratio:"))
+        split_section.addWidget(self.split_combo)
+        # K-Fold SpinBox
+        self.kfold_spin = QSpinBox()
+        self.kfold_spin.setRange(2, 20)
+        self.kfold_spin.setValue(5)
+        split_section.addWidget(QLabel("K-Fold:"))
+        split_section.addWidget(self.kfold_spin)
         
         # Add to left section
         left_section.addLayout(dataset_layout)
         left_section.addWidget(load_btn)
+        left_section.addWidget(missing_group)
         left_section.addLayout(scaling_layout)
-        left_section.addLayout(split_layout)
+        left_section.addLayout(split_section)
         
         # Right section for loss function selection
         right_section = QVBoxLayout()
@@ -469,6 +497,10 @@ class MLCourseGUI(QMainWindow):
                 y_train = self.y_train.ravel() if len(self.y_train.shape) > 1 else self.y_train
                 y_test = self.y_test.ravel() if len(self.y_test.shape) > 1 else self.y_test
             
+            # K-Fold cross-validation
+            k = self.kfold_spin.value() if hasattr(self, 'kfold_spin') else 5
+            from sklearn.model_selection import cross_val_score
+            from sklearn.metrics import make_scorer, mean_squared_error
             model = None
             if name == "Linear Regression":
                 model = LinearRegression(
@@ -482,9 +514,15 @@ class MLCourseGUI(QMainWindow):
                     class_weight=self.class_weights_dict
                 )
             elif name == "Naive Bayes":
-                model = GaussianNB(
-                    var_smoothing=param_widgets['var_smoothing'].value()
-                )
+                var_smoothing = param_widgets['var_smoothing'].value()
+                priors_text = param_widgets['priors'].text() if 'priors' in param_widgets else ""
+                priors = None
+                if priors_text:
+                    try:
+                        priors = [float(x) for x in priors_text.strip('[]').split(',')]
+                    except Exception:
+                        priors = None
+                model = GaussianNB(var_smoothing=var_smoothing, priors=priors)
             elif name == "Support Vector Machine":
                 model = SVC(
                     C=param_widgets['C'].value(),
@@ -517,7 +555,14 @@ class MLCourseGUI(QMainWindow):
                 self.show_error("Model not implemented")
                 return
 
-            # Train model
+            # Cross-validation metrics (only if k > 1 and enough samples)
+            if k > 1 and self.X_train.shape[0] >= k:
+                accuracy = cross_val_score(model, self.X_train, y_train, cv=k, scoring='accuracy')
+                mse = cross_val_score(model, self.X_train, y_train, cv=k, scoring='neg_mean_squared_error')
+                rmse = np.sqrt(-mse)
+                msg = f"K-Fold Accuracy: {accuracy.mean():.3f} ± {accuracy.std():.3f}\nK-Fold RMSE: {rmse.mean():.3f}"
+                QMessageBox.information(self, "K-Fold Cross-Validation Results", msg)
+            # Train model on all data
             model.fit(self.X_train, y_train)
             self.current_model = model
             
@@ -554,16 +599,32 @@ class MLCourseGUI(QMainWindow):
                 data = datasets.load_breast_cancer()
                 X, y = data.data, data.target
             
+            # Apply missing data handling
+            method = self.missing_combo.currentText()
+            if method == "Mean Imputation":
+                imputer = SimpleImputer(strategy="mean")
+                X = imputer.fit_transform(X)
+            # (No Action: do nothing)
+
             # Split data
-            test_size = self.split_spin.value() / 100
-            self.X_train, self.X_test, self.y_train, self.y_test = \
-                model_selection.train_test_split(X, y, test_size=test_size, random_state=42)
+            train_r, val_r, test_r = self.get_split_values() if hasattr(self, 'get_split_values') else (0.8, 0.0, 0.2)
+            if val_r > 0:
+                X_train, X_tmp, y_train, y_tmp = model_selection.train_test_split(X, y, test_size=(1-train_r), random_state=42)
+                val_size = val_r/(val_r+test_r)
+                self.X_val, self.X_test, self.y_val, self.y_test = model_selection.train_test_split(X_tmp, y_tmp, test_size=(test_r/(val_r+test_r)), random_state=42)
+                self.X_train, self.y_train = X_train, y_train
+            else:
+                self.X_train, self.X_test, self.y_train, self.y_test = model_selection.train_test_split(X, y, test_size=test_r, random_state=42)
+                self.X_val, self.y_val = None, None
             
             # Apply scaling if selected
             self.apply_scaling()
             
             # Update axis options
             self.update_axis_options()
+            
+            # Update max values for dimred spinboxes
+            self.update_dimred_spinboxes()
             
             self.status_bar.showMessage(f"Loaded {dataset_name}")
             self.plot_raw_data()
@@ -591,19 +652,33 @@ class MLCourseGUI(QMainWindow):
                 if target_col:
                     X = data.drop(target_col, axis=1).values
                     y = data[target_col].values
-                    
+
+                    # Apply missing data handling
+                    method = self.missing_combo.currentText()
+                    if method == "Mean Imputation":
+                        imputer = SimpleImputer(strategy="mean")
+                        X = imputer.fit_transform(X)
+                    # (No Action: do nothing)
+
                     # Split data
-                    test_size = self.split_spin.value() / 100
-                    self.X_train, self.X_test, self.y_train, self.y_test = \
-                        model_selection.train_test_split(X, y, 
-                                                      test_size=test_size, 
-                                                      random_state=42)
+                    train_r, val_r, test_r = self.get_split_values() if hasattr(self, 'get_split_values') else (0.8, 0.0, 0.2)
+                    if val_r > 0:
+                        X_train, X_tmp, y_train, y_tmp = model_selection.train_test_split(X, y, test_size=(1-train_r), random_state=42)
+                        val_size = val_r/(val_r+test_r)
+                        self.X_val, self.X_test, self.y_val, self.y_test = model_selection.train_test_split(X_tmp, y_tmp, test_size=(test_r/(val_r+test_r)), random_state=42)
+                        self.X_train, self.y_train = X_train, y_train
+                    else:
+                        self.X_train, self.X_test, self.y_train, self.y_test = model_selection.train_test_split(X, y, test_size=test_r, random_state=42)
+                        self.X_val, self.y_val = None, None
                     
                     # Apply scaling if selected
                     self.apply_scaling()
                     
                     # Update axis options
                     self.update_axis_options()
+                    
+                    # Update max values for dimred spinboxes
+                    self.update_dimred_spinboxes()
                     
                     self.status_bar.showMessage(f"Loaded custom dataset: {file_name}")
                     self.plot_raw_data()
@@ -727,7 +802,9 @@ class MLCourseGUI(QMainWindow):
             ("Classical ML", self.create_classical_ml_tab),
             ("Deep Learning", self.create_deep_learning_tab),
             ("Dimensionality Reduction", self.create_dim_reduction_tab),
-            ("Reinforcement Learning", self.create_rl_tab)
+            ("Reinforcement Learning", self.create_rl_tab),
+            ("Advanced Dim Reduction", self.create_advanced_dim_reduction_tab),
+            ("Feature Extraction", self.create_feature_extraction_tab)
         ]
         
         for tab_name, create_func in tabs:
@@ -775,7 +852,8 @@ class MLCourseGUI(QMainWindow):
         # Naive Bayes
         nb_group = self.create_algorithm_group(
             "Naive Bayes",
-            {"var_smoothing": "double"}
+            {"var_smoothing": "double",
+             "priors": "text"}
         )
         classification_layout.addWidget(nb_group)
         
@@ -913,6 +991,8 @@ class MLCourseGUI(QMainWindow):
                 widget.setSingleStep(0.1)
             elif param_type == "checkbox":
                 widget = QCheckBox()
+            elif param_type == "text":
+                widget = QLineEdit()
             elif isinstance(param_type, list):
                 widget = QComboBox()
                 widget.addItems(param_type)
@@ -920,7 +1000,16 @@ class MLCourseGUI(QMainWindow):
             param_layout.addWidget(widget)
             param_widgets[param_name] = widget
             layout.addLayout(param_layout)
-        
+
+        # Add custom priors field for Naive Bayes
+        if name == "Naive Bayes":
+            priors_layout = QHBoxLayout()
+            priors_layout.addWidget(QLabel("Priors (e.g. [0.3, 0.7]):"))
+            priors_widget = QLineEdit()
+            param_widgets["priors"] = priors_widget
+            priors_layout.addWidget(priors_widget)
+            layout.addLayout(priors_layout)
+
         # Add train button
         train_btn = QPushButton(f"Train {name}")
         train_btn.clicked.connect(lambda: self.train_model(name, param_widgets))
@@ -1277,6 +1366,351 @@ class MLCourseGUI(QMainWindow):
                 
             except Exception as e:
                 self.show_error(f"Error applying scaling: {str(e)}")
+
+    def create_feature_extraction_tab(self):
+        """Tab for PCA, SVD, t-SNE, LDA: user-selectable components and explained variance/görselleştirme ekle."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # PCA Section
+        pca_group = QGroupBox("Principal Component Analysis (PCA)")
+        pca_layout = QVBoxLayout()
+        self.pca_n_components = QSpinBox()
+        self.pca_n_components.setRange(1, 20)
+        self.pca_n_components.setValue(2)
+        pca_layout.addWidget(QLabel("Number of components:"))
+        pca_layout.addWidget(self.pca_n_components)
+        self.pca_btn = QPushButton("Run PCA")
+        self.pca_btn.clicked.connect(self.run_pca)
+        pca_layout.addWidget(self.pca_btn)
+        pca_group.setLayout(pca_layout)
+        
+        # SVD Section
+        svd_group = QGroupBox("Truncated SVD")
+        svd_layout = QVBoxLayout()
+        self.svd_n_components = QSpinBox()
+        self.svd_n_components.setRange(1, 20)
+        self.svd_n_components.setValue(2)
+        svd_layout.addWidget(QLabel("Number of components:"))
+        svd_layout.addWidget(self.svd_n_components)
+        self.svd_btn = QPushButton("Run SVD")
+        self.svd_btn.clicked.connect(self.run_svd)
+        svd_layout.addWidget(self.svd_btn)
+        svd_group.setLayout(svd_layout)
+        
+        # t-SNE Section
+        tsne_group = QGroupBox("t-SNE")
+        tsne_layout = QVBoxLayout()
+        self.tsne_n_components = QSpinBox()
+        self.tsne_n_components.setRange(2, 3)
+        self.tsne_n_components.setValue(2)
+        tsne_layout.addWidget(QLabel("Number of components:"))
+        tsne_layout.addWidget(self.tsne_n_components)
+        self.tsne_btn = QPushButton("Run t-SNE")
+        self.tsne_btn.clicked.connect(self.run_tsne_projection)
+        tsne_layout.addWidget(self.tsne_btn)
+        tsne_group.setLayout(tsne_layout)
+        
+        # LDA Section
+        lda_group = QGroupBox("LDA (Linear Discriminant Analysis)")
+        lda_layout = QVBoxLayout()
+        self.lda_n_components = QSpinBox()
+        self.lda_n_components.setRange(1, 5)
+        self.lda_n_components.setValue(1)
+        lda_layout.addWidget(QLabel("Number of components:"))
+        lda_layout.addWidget(self.lda_n_components)
+        self.lda_btn = QPushButton("Run LDA")
+        self.lda_btn.clicked.connect(self.run_lda_projection)
+        lda_layout.addWidget(self.lda_btn)
+        lda_group.setLayout(lda_layout)
+        
+        # Add all sections
+        layout.addWidget(pca_group)
+        layout.addWidget(svd_group)
+        layout.addWidget(tsne_group)
+        layout.addWidget(lda_group)
+        widget.setLayout(layout)
+        return widget
+
+    def run_pca(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.pca_n_components.value()
+        pca = PCA(n_components=n)
+        X_pca = pca.fit_transform(self.X_train)
+        plt.figure(figsize=(6,4))
+        plt.plot(np.arange(1, len(pca.explained_variance_ratio_)+1), np.cumsum(pca.explained_variance_ratio_), marker="o")
+        plt.xlabel("# Components")
+        plt.ylabel("Cumulative Explained Variance")
+        plt.title("PCA Explained Variance")
+        plt.tight_layout()
+        plt.show()
+
+    def run_svd(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.svd_n_components.value()
+        svd = TruncatedSVD(n_components=n)
+        X_svd = svd.fit_transform(self.X_train)
+        plt.figure(figsize=(6,4))
+        plt.plot(np.arange(1, len(svd.explained_variance_ratio_)+1), np.cumsum(svd.explained_variance_ratio_), marker="o")
+        plt.xlabel("# Components")
+        plt.ylabel("Cumulative Explained Variance")
+        plt.title("SVD Explained Variance")
+        plt.tight_layout()
+        plt.show()
+
+    def run_tsne_projection(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.tsne_n_components.value()
+        tsne = TSNE(n_components=n, random_state=0)
+        X_tsne = tsne.fit_transform(self.X_train)
+        plt.figure(figsize=(6,4))
+        plt.scatter(X_tsne[:,0], X_tsne[:,1], c='b', s=8)
+        plt.title("t-SNE Projection")
+        plt.tight_layout()
+        plt.show()
+
+    def run_lda_projection(self):
+        if self.X_train is None or self.y_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.lda_n_components.value()
+        lda = LDA(n_components=n)
+        try:
+            X_lda = lda.fit_transform(self.X_train, np.argmax(self.y_train, axis=1) if len(self.y_train.shape) > 1 else self.y_train)
+            plt.figure(figsize=(6,4))
+            if n == 1:
+                plt.hist(X_lda, bins=30)
+            else:
+                plt.scatter(X_lda[:,0], X_lda[:,1], c='g', s=8)
+            plt.title("LDA Projection")
+            plt.tight_layout()
+            plt.show()
+        except Exception as e:
+            self.show_error(f"LDA error: {e}")
+
+    def create_advanced_dim_reduction_tab(self):
+        """Tab for PCA, LDA, t-SNE, KMeans: user-selectable components and explained variance/görselleştirme ekle."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # PCA Section
+        pca_group = QGroupBox("Principal Component Analysis (PCA)")
+        pca_layout = QVBoxLayout()
+        self.pca2_n_components = QSpinBox()
+        self.pca2_n_components.setRange(1, 20)
+        self.pca2_n_components.setValue(2)
+        pca_layout.addWidget(QLabel("Number of components:"))
+        pca_layout.addWidget(self.pca2_n_components)
+        self.pca2_btn = QPushButton("Run PCA")
+        self.pca2_btn.clicked.connect(self.run_pca2)
+        pca_layout.addWidget(self.pca2_btn)
+        pca_group.setLayout(pca_layout)
+        
+        # LDA Section
+        lda_group = QGroupBox("LDA (Linear Discriminant Analysis)")
+        lda_layout = QVBoxLayout()
+        self.lda2_n_components = QSpinBox()
+        self.lda2_n_components.setRange(1, 5)
+        self.lda2_n_components.setValue(1)
+        lda_layout.addWidget(QLabel("Number of components:"))
+        lda_layout.addWidget(self.lda2_n_components)
+        self.lda2_btn = QPushButton("Run LDA")
+        self.lda2_btn.clicked.connect(self.run_lda2)
+        lda_layout.addWidget(self.lda2_btn)
+        lda_group.setLayout(lda_layout)
+        
+        # KMeans Section
+        kmeans_group = QGroupBox("K-Means Clustering")
+        kmeans_layout = QVBoxLayout()
+        self.kmeans_k = QSpinBox()
+        self.kmeans_k.setRange(2, 10)
+        self.kmeans_k.setValue(3)
+        kmeans_layout.addWidget(QLabel("Number of clusters (k):"))
+        kmeans_layout.addWidget(self.kmeans_k)
+        self.kmeans_btn = QPushButton("Run KMeans")
+        self.kmeans_btn.clicked.connect(self.run_kmeans2)
+        kmeans_layout.addWidget(self.kmeans_btn)
+        self.elbow_btn = QPushButton("Show Elbow Method")
+        self.elbow_btn.clicked.connect(self.show_elbow2)
+        kmeans_layout.addWidget(self.elbow_btn)
+        kmeans_group.setLayout(kmeans_layout)
+        
+        # t-SNE Section
+        tsne_group = QGroupBox("t-SNE (Interactive Projections)")
+        tsne_layout = QVBoxLayout()
+        self.tsne2_n_components = QSpinBox()
+        self.tsne2_n_components.setRange(2, 3)
+        self.tsne2_n_components.setValue(2)
+        tsne_layout.addWidget(QLabel("Number of components:"))
+        tsne_layout.addWidget(self.tsne2_n_components)
+        self.tsne2_perplexity = QDoubleSpinBox()
+        self.tsne2_perplexity.setRange(5, 50)
+        self.tsne2_perplexity.setValue(30)
+        tsne_layout.addWidget(QLabel("Perplexity:"))
+        tsne_layout.addWidget(self.tsne2_perplexity)
+        self.tsne2_btn = QPushButton("Run t-SNE")
+        self.tsne2_btn.clicked.connect(self.run_tsne2)
+        tsne_layout.addWidget(self.tsne2_btn)
+        tsne_group.setLayout(tsne_layout)
+        
+        # Add all sections
+        layout.addWidget(pca_group)
+        layout.addWidget(lda_group)
+        layout.addWidget(kmeans_group)
+        layout.addWidget(tsne_group)
+        widget.setLayout(layout)
+        return widget
+
+    def run_pca2(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.pca2_n_components.value()
+        pca = PCA(n_components=n)
+        X_pca = pca.fit_transform(self.X_train)
+        plt.figure(figsize=(6,4))
+        plt.plot(np.arange(1, len(pca.explained_variance_ratio_)+1), np.cumsum(pca.explained_variance_ratio_), marker="o")
+        plt.xlabel("# Components")
+        plt.ylabel("Cumulative Explained Variance")
+        plt.title("PCA Explained Variance")
+        plt.tight_layout()
+        plt.show()
+
+    def run_lda2(self):
+        if self.X_train is None or self.y_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.lda2_n_components.value()
+        lda = LDA(n_components=n)
+        try:
+            y = np.argmax(self.y_train, axis=1) if len(self.y_train.shape) > 1 else self.y_train
+            X_lda = lda.fit_transform(self.X_train, y)
+            plt.figure(figsize=(6,4))
+            if n == 1:
+                plt.hist(X_lda, bins=30)
+            else:
+                plt.scatter(X_lda[:,0], X_lda[:,1], c=y, s=8, cmap='tab10')
+            plt.title("LDA Projection")
+            plt.tight_layout()
+            plt.show()
+        except Exception as e:
+            self.show_error(f"LDA error: {e}")
+
+    def run_kmeans2(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        k = self.kmeans_k.value()
+        from sklearn.cluster import KMeans
+        km = KMeans(n_clusters=k, n_init=10)
+        labels = km.fit_predict(self.X_train)
+        sil = silhouette_score(self.X_train, labels)
+        plt.figure(figsize=(6,4))
+        if self.X_train.shape[1] >= 2:
+            plt.scatter(self.X_train[:,0], self.X_train[:,1], c=labels, cmap='tab10', s=8)
+        plt.title("KMeans Clustering (first 2 dims)")
+        plt.suptitle(f"Silhouette score: {sil:.3f}")
+        plt.tight_layout()
+        plt.show()
+
+    def show_elbow2(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        inertias = []
+        K = range(1, 11)
+        from sklearn.cluster import KMeans
+        for k in K:
+            km = KMeans(n_clusters=k, n_init=10).fit(self.X_train)
+            inertias.append(km.inertia_)
+        plt.figure(figsize=(6,4))
+        plt.plot(K, inertias, marker="o")
+        plt.xlabel("k")
+        plt.ylabel("Inertia (Elbow)")
+        plt.title("Elbow Method")
+        plt.tight_layout()
+        plt.show()
+
+    def run_tsne2(self):
+        if self.X_train is None:
+            self.show_error("Load data first!")
+            return
+        n = self.tsne2_n_components.value()
+        perplexity = self.tsne2_perplexity.value()
+        tsne = TSNE(n_components=n, perplexity=perplexity, random_state=0)
+        X_tsne = tsne.fit_transform(self.X_train)
+        plt.figure(figsize=(6,4))
+        if n == 2:
+            plt.scatter(X_tsne[:,0], X_tsne[:,1], c='b', s=8)
+        else:
+            from mpl_toolkits.mplot3d import Axes3D
+            ax = plt.axes(projection='3d')
+            ax.scatter(X_tsne[:,0], X_tsne[:,1], X_tsne[:,2], c='b', s=8)
+        plt.title("t-SNE Projection")
+        plt.tight_layout()
+        plt.show()
+    
+    def update_dimred_spinboxes(self):
+        """Update max values of all dimension reduction component spinboxes based on current data."""
+        if self.X_train is not None:
+            n_samples = self.X_train.shape[0]
+            n_features = self.X_train.shape[1]
+            max_comp = min(n_samples, n_features)
+            # PCA
+            if hasattr(self, 'pca_n_components'):
+                self.pca_n_components.setMaximum(max_comp)
+            if hasattr(self, 'pca2_n_components'):
+                self.pca2_n_components.setMaximum(max_comp)
+            # SVD
+            if hasattr(self, 'svd_n_components'):
+                self.svd_n_components.setMaximum(max_comp)
+            # LDA (max sınıf sayısı - 1)
+            if hasattr(self, 'lda_n_components') and self.y_train is not None:
+                try:
+                    n_classes = len(np.unique(self.y_train))
+                    self.lda_n_components.setMaximum(min(max_comp, n_classes-1))
+                except Exception:
+                    self.lda_n_components.setMaximum(max_comp)
+            if hasattr(self, 'lda2_n_components') and self.y_train is not None:
+                try:
+                    n_classes = len(np.unique(self.y_train))
+                    self.lda2_n_components.setMaximum(min(max_comp, n_classes-1))
+                except Exception:
+                    self.lda2_n_components.setMaximum(max_comp)
+            # t-SNE
+            if hasattr(self, 'tsne_n_components'):
+                self.tsne_n_components.setMaximum(min(3, max_comp))
+            if hasattr(self, 'tsne2_n_components'):
+                self.tsne2_n_components.setMaximum(min(3, max_comp))
+
+    def get_split_values(self):
+        opt = self.split_combo.currentText()
+        if opt.startswith("80-20"):
+            return 0.8, 0.0, 0.2
+        elif opt.startswith("70-15-15"):
+            return 0.7, 0.15, 0.15
+        elif opt.startswith("60-20-20"):
+            return 0.6, 0.2, 0.2
+        else:
+            return 0.8, 0.0, 0.2
+
+class PlotDialog(QDialog):
+    def __init__(self, fig, title="Plot", metrics=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        layout = QVBoxLayout(self)
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        if metrics:
+            for m in metrics:
+                layout.addWidget(QLabel(m))
+        self.setLayout(layout)
 
 def main():
     app = QApplication(sys.argv)
