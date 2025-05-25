@@ -1,119 +1,95 @@
 # Machine Learning Course GUI
 
-Bu proje, makine öğrenimi ve derin öğrenme modellerini **kolayca yapılandırmanızı**, **eğitmenizi**, **değerlendirmenizi** ve **görselleştirmenizi** sağlayan kapsamlı bir PyQt6 tabanlı grafiksel kullanıcı arayüzüdür. Hem klasik makine öğrenimi algoritmalarını hem de derin öğrenme yapılarını destekler; ayrıca boyut indirgeme, özellik çıkarımı ve pekiştirmeli öğrenme için ayrılmış sekmeler sunar.
+A comprehensive GUI application for machine learning experimentation and education, featuring classical ML algorithms, deep learning, GANs, and more.
 
----
+## Features
 
-## Özellikler
+- Classical Machine Learning algorithms (Regression, Classification)
+- Deep Learning with customizable architectures
+- Generative Adversarial Networks (GANs)
+- Dimensionality Reduction techniques
+- Feature Extraction
+- Real-time training visualization
+- Comprehensive logging system
 
-### 1. Veri Yönetimi
-- **Öntanımlı Veri Setleri**: Iris, Boston Housing, Breast Cancer.
-- **Özel CSV Yükleme**: Kullanıcının kendi CSV dosyasını seçip hedef değişkeni diyaloğu ile belirleyebilme.
-- **Eksik Veri İşleme**:
-  - _No Action_ (Hiçbir işlem yapılmaz)
-  - _Mean Imputation_ (Ortalama ile doldurma)
-- **Öznitelik Ölçekleme**:
-  - No Scaling
-  - Standard Scaling
-  - Min-Max Scaling
-  - Robust Scaling
-- **Veri Bölme**:
-  - Split oranları: 80-20 (Train-Test), 70-15-15, 60-20-20
-  - K-Fold çapraz doğrulama (2–20 kat)
+## Setup Instructions
 
-### 2. Görselleştirme
-- **Ham Veri**: 3B scatter plot + ek histogram
-- **Model Tahminleri**: 3B scatter plot ile tahmin vs. gerçek değerler
-- **Metrikler**: Hata, doğruluk, karışıklık matrisi vb.
-- Dinamik eksen seçimi: X, Y, Z (veya hedef değişken)
+1. Create a virtual environment (recommended):
 
-### 3. Model Eğitimi: Klasik ML
-- Algoritmalar:
-  - **Regresyon**: Linear Regression, Logistic Regression
-  - **Sınıflandırma**: Naive Bayes (GaussianNB), SVM, Decision Tree, Random Forest, KNN
-  - **Kümeleme**: K-Means
-- Parametre ayarları: her algoritma için ilgili widget’lar (SpinBox, ComboBox, Checkbox)
-- **K-Fold** sonuçları: Accuracy ve RMSE çıktısı bildirimi
-
-### 4. Kayıp Fonksiyonu Ayarları
-- **Sınıflandırma**:
-  - Cross Entropy (kategorik)
-  - Binary Cross Entropy
-  - Hinge Loss
-  - Sınıf ağırlıkları: None, Balanced, Custom
-- **Regresyon**:
-  - Mean Squared Error (MSE)
-  - Mean Absolute Error (MAE)
-  - Huber Loss (δ parametresi)
-
-### 5. Derin Öğrenme
-- **Dinamik Katman Yapısı**: Dense, Conv2D, MaxPooling2D, Flatten, Dropout
-- **Eğitim Parametreleri**: Batch Size, Epochs, Learning Rate
-- **Eğitim İlerleme**: Progress bar & grafik çıktıları (loss/accuracy)
-
-### 6. Boyut İndirgeme Sekmesi
-- **PCA**: Açıklanan varyans grafiği
-- **Truncated SVD**: Açıklanan varyans grafiği
-- **t‑SNE**: 2 veya 3 boyutlu projeksiyon
-- **LDA**: Tek boyutlu histogram veya çok boyutlu scatter plot
-
-### 7. Gelişmiş Boyut İndirgeme
-- **Elbow Method** ve **Silhouette Score** ile K-Means kümeleme
-- Özelleştirilebilir t‑SNE Perplexity
-
-### 8. Özellik Çıkarımı
-- Ayrı bir sekmede PCA, SVD, t‑SNE ve LDA işlemleri: bileşen sayısı seçimi & sonuç görselleştirme
-
-### 9. Pekiştirmeli Öğrenme (RL)
-- **Ortamlar**: CartPole-v1, MountainCar-v0, Acrobot-v1
-- **Algoritmalar**: Q-Learning, SARSA, DQN (geliştirme aşamasında)
-
----
-
-## Kurulum
-
-1. **Python 3.7+** yüklü olduğundan emin olun.
-2. Gerekli paketleri yükleyin:
-   ```bash
-   pip install numpy pandas matplotlib PyQt6 scikit-learn tensorflow
-   ```
-3. Proje dosyalarını indirin/clonelayın.
-4. Ana dizinde terminalde:
-   ```bash
-   python v19.py
-   ```
-
----
-
-## Kullanım
-1. Uygulamayı çalıştırdığınızda üst kısımda **Data Management** bölümünden veri setinizi seçin veya CSV yükleyin.
-2. Eksik veri, ölçekleme ve split ayarlarını yapılandırın.
-3. **Apply Loss Settings** ile kayıp fonksiyonunu ve (varsa) sınıf ağırlıklarını belirleyin.
-4. Alt sekmelerden ilgilendiğiniz ML yöntemini seçip parametreleri girin.
-5. **Train** butonuna basın, sonuçlar ve grafikler otomatik güncellenecektir.
-
----
-
-## Proje Yapısı
-```
-├── README.md          # Proje dokümantasyonu
-├── 21067004.py        # Ana uygulama kodu
-└── requirements.txt   # (isteğe bağlı) paket listesi
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
----
+2. Install dependencies:
 
-## Sorun Giderme
-- **GUI açılmıyor**: PyQt6 sürümünü kontrol edin.
-- **TensorFlow Hataları**: GPU/CPU sürüm uyumluluğu.
-- **Eksik paket**: `pip install <package_name>` ile yükleyin.
+```bash
+pip install -r requirements.txt
+```
 
----
+3. Run the application:
 
-## Katkıda Bulunanlar
-- YTÜ.
+```bash
+python v18.py
+```
 
----
+## Usage Guide
 
-## Lisans
-MIT Lisansı
+### Data Loading
+
+1. Select a dataset from the dropdown menu (Iris, Boston Housing, Breast Cancer, or Custom CSV)
+2. Choose data preprocessing options (scaling, missing value handling)
+3. Click "Load Data" to load the dataset
+
+### Training Models
+
+1. Navigate to the appropriate tab for your desired model type
+2. Configure model parameters
+3. Click "Train" to start training
+4. Monitor progress in the status bar and training log
+5. View results in the visualization panel
+
+### GAN Training
+
+1. Load a dataset
+2. Go to the "GAN" tab
+3. Configure GAN parameters:
+   - Latent dimension
+   - Number of epochs
+   - Batch size
+4. Click "Train GAN" to start training
+5. Monitor training progress in the log window
+6. View generated samples in the visualization panel
+
+### Real-time Logging
+
+- Training logs are saved to `ml_gui_YYYYMMDD_HHMMSS.log`
+- View real-time training progress in the GUI
+- Monitor model performance metrics
+
+## Requirements
+
+- Python 3.7+
+- PyQt6
+- TensorFlow 2.4+
+- PyTorch 1.7+
+- scikit-learn
+- matplotlib
+- numpy
+- pandas
+
+## Notes
+
+- For GAN training, ensure your dataset is properly normalized
+- The application supports both CPU and GPU training
+- Training progress can be monitored in real-time through the GUI
+- Generated samples are visualized using PCA for high-dimensional data
+
+## Troubleshooting
+
+If you encounter any issues:
+
+1. Ensure all dependencies are correctly installed
+2. Check the log file for detailed error messages
+3. Verify your dataset format when using custom data
+4. For GPU acceleration, ensure CUDA is properly installed
