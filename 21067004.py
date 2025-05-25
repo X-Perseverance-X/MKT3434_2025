@@ -132,7 +132,6 @@ class MLCourseGUI(QMainWindow):
 
     def create_gan_tab(self):
         widget = QWidget()
-        
         layout = QVBoxLayout(widget)
 
         # GAN Configuration
@@ -246,7 +245,6 @@ class MLCourseGUI(QMainWindow):
     def create_data_section(self):
         """Create the data management section"""
         data_group = QGroupBox("Data Management")
-        data_group.setStyleSheet("background-color : lightblue;")
         data_group.setMaximumHeight(250)  # Reduced vertical height
         layout = QHBoxLayout()
         
@@ -406,7 +404,7 @@ class MLCourseGUI(QMainWindow):
     def create_visualization(self):
         """Create the visualization section"""
         viz_group = QGroupBox("Visualization")
-        viz_group.setStyleSheet("background-color: lightyellow;")
+        
         layout = QHBoxLayout()  # Changed back to HBox for side-by-side plots
         
         # Left side: Raw data plot with axis selection
@@ -1003,7 +1001,6 @@ class MLCourseGUI(QMainWindow):
     def create_tabs(self):
         """Create tabs for different ML topics"""
         self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("background-color: #FFC0CB;")
         # Create individual tabs
         tabs = [
             ("Classical ML", self.create_classical_ml_tab),
@@ -1440,54 +1437,158 @@ class MLCourseGUI(QMainWindow):
         """Create controls for Convolutional Neural Network"""
         group = QGroupBox("CNN Architecture")
         layout = QVBoxLayout()
-        
-        # Placeholder for CNN-specific controls
-        label = QLabel("CNN Controls (To be implemented)")
-        layout.addWidget(label)
-        
+
+        # Filtre sayısı
+        filters_label = QLabel("Filters:")
+        filters_spin = QSpinBox()
+        filters_spin.setRange(1, 512)
+        filters_spin.setValue(32)
+        layout.addWidget(filters_label)
+        layout.addWidget(filters_spin)
+
+        # Kernel boyutu
+        kernel_label = QLabel("Kernel Size:")
+        kernel_spin = QSpinBox()
+        kernel_spin.setRange(1, 10)
+        kernel_spin.setValue(3)
+        layout.addWidget(kernel_label)
+        layout.addWidget(kernel_spin)
+
+        # Aktivasyon fonksiyonu
+        activation_label = QLabel("Activation:")
+        activation_combo = QComboBox()
+        activation_combo.addItems(["relu", "sigmoid", "tanh", "softmax"])
+        layout.addWidget(activation_label)
+        layout.addWidget(activation_combo)
+
+        # Katman ekle butonu
+        add_btn = QPushButton("Add Conv2D Layer")
+        def add_cnn_layer():
+            params = {
+                "filters": filters_spin.value(),
+                "kernel_size": kernel_spin.value(),
+                "activation": activation_combo.currentText(),
+                # input_shape ilk katmanda ekleniyor, burada eklenmiyor
+            }
+            self.layer_config.append({"type": "Conv2D", "params": params})
+            QMessageBox.information(self, "Layer Added", f"Conv2D layer added: {params}")
+        add_btn.clicked.connect(add_cnn_layer)
+        layout.addWidget(add_btn)
+
+        # MaxPooling ekle
+        pool_btn = QPushButton("Add MaxPooling2D")
+        def add_pool_layer():
+            self.layer_config.append({"type": "MaxPooling2D", "params": {}})
+            QMessageBox.information(self, "Layer Added", "MaxPooling2D layer added.")
+        pool_btn.clicked.connect(add_pool_layer)
+        layout.addWidget(pool_btn)
+
+        # Flatten ekle
+        flatten_btn = QPushButton("Add Flatten")
+        def add_flatten_layer():
+            self.layer_config.append({"type": "Flatten", "params": {}})
+            QMessageBox.information(self, "Layer Added", "Flatten layer added.")
+        flatten_btn.clicked.connect(add_flatten_layer)
+        layout.addWidget(flatten_btn)
+
         group.setLayout(layout)
         return group
+
     
     def create_rnn_controls(self):
         """Create controls for Recurrent Neural Network"""
         group = QGroupBox("RNN Architecture")
         layout = QVBoxLayout()
-        
-        # Placeholder for RNN-specific controls
-        label = QLabel("RNN Controls (To be implemented)")
-        layout.addWidget(label)
-        
+
+        # RNN tipi
+        rnn_type_label = QLabel("RNN Type:")
+        rnn_type_combo = QComboBox()
+        rnn_type_combo.addItems(["LSTM", "GRU"])
+        layout.addWidget(rnn_type_label)
+        layout.addWidget(rnn_type_combo)
+
+        # Ünite sayısı
+        units_label = QLabel("Units:")
+        units_spin = QSpinBox()
+        units_spin.setRange(1, 512)
+        units_spin.setValue(32)
+        layout.addWidget(units_label)
+        layout.addWidget(units_spin)
+
+        # Aktivasyon fonksiyonu
+        activation_label = QLabel("Activation:")
+        activation_combo = QComboBox()
+        activation_combo.addItems(["tanh", "relu", "sigmoid"])
+        layout.addWidget(activation_label)
+        layout.addWidget(activation_combo)
+
+        # Return sequences
+        return_seq_chk = QCheckBox("Return Sequences")
+        layout.addWidget(return_seq_chk)
+
+        # Katman ekle butonu
+        add_btn = QPushButton("Add RNN Layer")
+        def add_rnn_layer():
+            params = {
+                "units": units_spin.value(),
+                "activation": activation_combo.currentText(),
+                "return_sequences": return_seq_chk.isChecked()
+            }
+            rnn_type = rnn_type_combo.currentText()
+            self.layer_config.append({"type": rnn_type, "params": params})
+            QMessageBox.information(self, "Layer Added", f"{rnn_type} layer added: {params}")
+        add_btn.clicked.connect(add_rnn_layer)
+        layout.addWidget(add_btn)
+
         group.setLayout(layout)
         return group
+
     
     def create_neural_network(self):
         """Create neural network based on current configuration"""
         model = models.Sequential()
-        
-        # Add layers based on configuration
+        first_layer = True
         for layer_config in self.layer_config:
             layer_type = layer_config["type"]
-            params = layer_config["params"]
-            
+            params = layer_config["params"].copy()  # Orijinali bozma
+            # Dense
             if layer_type == "Dense":
-                model.add(layers.Dense(**params))
-            elif layer_type == "Conv2D":
-                # Add input shape for the first layer
-                if len(model.layers) == 0:
+                if first_layer and 'input_shape' not in params:
                     params['input_shape'] = self.X_train.shape[1:]
+                    first_layer = False
+                model.add(layers.Dense(**params))
+            # Conv2D
+            elif layer_type == "Conv2D":
+                if first_layer and 'input_shape' not in params:
+                    params['input_shape'] = self.X_train.shape[1:]
+                    first_layer = False
                 model.add(layers.Conv2D(**params))
+            # MaxPooling2D
             elif layer_type == "MaxPooling2D":
                 model.add(layers.MaxPooling2D())
+            # Flatten
             elif layer_type == "Flatten":
                 model.add(layers.Flatten())
+            # Dropout
             elif layer_type == "Dropout":
                 model.add(layers.Dropout(**params))
-        
-        # Ensure flatten before Dense if Conv2D exists and no flatten yet
+            # LSTM
+            elif layer_type == "LSTM":
+                if first_layer and 'input_shape' not in params:
+                    params['input_shape'] = self.X_train.shape[1:]
+                    first_layer = False
+                model.add(layers.LSTM(**params))
+            # GRU
+            elif layer_type == "GRU":
+                if first_layer and 'input_shape' not in params:
+                    params['input_shape'] = self.X_train.shape[1:]
+                    first_layer = False
+                model.add(layers.GRU(**params))
+        # Eğer Conv2D varsa ve Flatten yoksa ekle
         if any(isinstance(layer, layers.Conv2D) for layer in model.layers):
             if not any(isinstance(layer, layers.Flatten) for layer in model.layers):
                 model.add(layers.Flatten())
-        # Add output layer based on number of classes inferred from target shape
+        # Çıkış katmanı
         if isinstance(self.y_train, np.ndarray) and self.y_train.ndim > 1:
             num_classes = self.y_train.shape[1]
         else:
@@ -1495,10 +1596,12 @@ class MLCourseGUI(QMainWindow):
         model.add(layers.Dense(num_classes, activation='softmax'))
         return model
 
+
     def create_progress_callback(self):
         """Create callback for updating progress bar during training"""
         class ProgressCallback(tf.keras.callbacks.Callback):
             def __init__(self, progress_bar):
+
                 super().__init__()
                 self.progress_bar = progress_bar
                 
