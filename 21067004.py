@@ -1,3 +1,5 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import sys
 import numpy as np
 import pandas as pd
@@ -6,8 +8,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QComboBox, QFileDialog, QSpinBox, QDoubleSpinBox,
                            QGroupBox, QScrollArea, QTextEdit, QStatusBar,
                            QProgressBar, QCheckBox, QGridLayout, QMessageBox,
-                           QDialog, QLineEdit)
-from PyQt6.QtCore import Qt
+                           QDialog, QLineEdit, QListWidget, QListWidgetItem)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -30,12 +32,188 @@ from sklearn.metrics import silhouette_score
 from sklearn.metrics import pairwise_distances
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers
+import logging
+from datetime import datetime
+import threading
+import queue
+
+# GAN: Generator ve Discriminator sınıfları
+class Generator(tf.keras.Model):
+    def __init__(self, latent_dim, output_dim):
+        super().__init__()
+        self.model = tf.keras.Sequential([
+            layers.Input(shape=(latent_dim,)),
+            layers.Dense(256, use_bias=False),
+            layers.BatchNormalization(),
+            layers.LeakyReLU(),
+            layers.Dense(512),
+            layers.BatchNormalization(),
+            layers.LeakyReLU(),
+            layers.Dense(1024),
+            layers.BatchNormalization(),
+            layers.LeakyReLU(),
+            layers.Dense(output_dim, activation='tanh')
+        ])
+
+    def call(self, inputs, training=False):
+        return self.model(inputs, training=training)
+
+class Discriminator(tf.keras.Model):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.model = tf.keras.Sequential([
+            layers.Input(shape=(input_dim,)),
+            layers.Dense(512),
+            layers.LeakyReLU(),
+            layers.Dropout(0.3),
+            layers.Dense(256),
+            layers.LeakyReLU(),
+            layers.Dropout(0.3),
+            layers.Dense(1, activation='sigmoid')
+        ])
+
+    def call(self, inputs, training=False):
+        return self.model(inputs, training=training)
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(f'ml_gui_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Custom logging handler for GUI
+class GUIHandler(logging.Handler):
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+        self.queue = queue.Queue()
+        self.thread = threading.Thread(target=self._process_queue, daemon=True)
+        self.thread.start()
+
+    def emit(self, record):
+        self.queue.put(record)
+
+    def _process_queue(self):
+        while True:
+            record = self.queue.get()
+            msg = self.format(record)
+            self.text_widget.append(msg)
+            self.text_widget.verticalScrollBar().setValue(
+                self.text_widget.verticalScrollBar().maximum()
+            )
 
 class MLCourseGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Machine Learning Course GUI")
         self.setGeometry(100, 100, 1400, 800)
+        self.main_widget = QWidget()
+        self.setCentralWidget(self.main_widget)
+        self.layout = QVBoxLayout(self.main_widget)
+        self.data = None
+        self.X_train = None
+        self.X_test = None
+        self.y_train = None
+        self.y_test = None
+        self.current_model = None
+        self.current_loss = "mse"
+        self.class_weights_dict = None
+        self.layer_config = []
+        self.create_data_section()
+        self.create_tabs()
+        self.create_visualization()
+        self.create_status_bar()
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
+
+    def create_gan_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # GAN Configuration
+
+    def start_gan_training(self):
+        """Start GAN training"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        try:
+            input_dim = self.X_train.shape[1]
+            latent_dim = self.latent_dim_spin.value()
+            self.generator = Generator(latent_dim, input_dim)
+            self.discriminator = Discriminator(input_dim)
+            dataset = tf.data.Dataset.from_tensor_slices(self.X_train)
+            self.gan_thread = GANTrainingThread(
+                self.generator,
+                self.discriminator,
+                dataset,
+                latent_dim,
+                self.gan_epochs_spin.value(),
+                self.gan_batch_size_spin.value()
+            )
+            self.gan_thread.progress_updated.connect(self.update_gan_progress)
+            self.gan_thread.training_log.connect(self.update_gan_log)
+            self.gan_thread.training_finished.connect(self.gan_training_finished)
+            self.train_gan_btn.setEnabled(False)
+            self.stop_gan_btn.setEnabled(True)
+            self.gan_thread.start()
+        except Exception as e:
+            self.show_error(f"Error starting GAN training: {str(e)}")
+            logger.error(f"GAN training error: {str(e)}")
+
+    def stop_gan_training(self):
+        """Stop GAN training"""
+        if hasattr(self, 'gan_thread'):
+            self.gan_thread.stop()
+            self.gan_thread.wait()
+            self.gan_training_finished()
+
+    def update_gan_progress(self, value):
+        """Update progress bar during GAN training"""
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(value)
+
+    def update_gan_log(self, message):
+        """Update training log during GAN training"""
+        if hasattr(self, 'gan_log_text'):
+            self.gan_log_text.append(message)
+        logger.info(message)
+
+    def gan_training_finished(self):
+        """Handle GAN training completion"""
+        self.train_gan_btn.setEnabled(True)
+        self.stop_gan_btn.setEnabled(False)
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(0)
+        self.generate_gan_samples()
+
+    def generate_gan_samples(self):
+        """Generate and display samples from trained GAN"""
+        if not hasattr(self, 'generator'):
+            return
+        try:
+            noise = tf.random.normal([16, self.latent_dim_spin.value()])
+            samples = self.generator(noise, training=False).numpy()
+            self.gan_figure.clear()
+            ax = self.gan_figure.add_subplot(111)
+            if samples.shape[1] > 2:
+                pca = PCA(n_components=2)
+                samples_2d = pca.fit_transform(samples)
+                ax.scatter(samples_2d[:, 0], samples_2d[:, 1])
+                ax.set_title("Generated Samples (PCA projection)")
+            else:
+                ax.scatter(samples[:, 0], samples[:, 1])
+                ax.set_title("Generated Samples")
+            self.gan_canvas.draw()
+        except Exception as e:
+            self.show_error(f"Error generating samples: {str(e)}")
+            logger.error(f"Sample generation error: {str(e)}")
+
+        # ... rest of your code ...
         
         # Initialize main widget and layout
         self.main_widget = QWidget()
@@ -400,7 +578,7 @@ class MLCourseGUI(QMainWindow):
                 ax_hist.set_ylabel('Additional Features\n(Mean)')
             
             # Adjust layout to center plots
-            self.figure.tight_layout()
+            self.figure.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
             
             # Add extra space around plots
             self.figure.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
@@ -688,6 +866,8 @@ class MLCourseGUI(QMainWindow):
 
     def train_neural_network(self):
         """Train neural network with current configuration"""
+        # Ensure loss settings and label format are applied before training
+        self.apply_loss_settings()
         if not self.layer_config:
             self.show_error("Please add at least one layer to the network")
             return
@@ -725,9 +905,32 @@ class MLCourseGUI(QMainWindow):
             
             self.current_model = model
             self.plot_training_history(history)
-            
         except Exception as e:
             self.show_error(f"Error training neural network: {str(e)}")
+
+    def plot_training_history(self, history):
+        """Plot training/validation loss and accuracy curves after training."""
+        import matplotlib.pyplot as plt
+        hist = history.history
+        fig, ax1 = plt.subplots()
+        ax1.plot(hist.get('loss', []), label='Train Loss')
+        if 'val_loss' in hist:
+            ax1.plot(hist['val_loss'], label='Val Loss')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss')
+        ax1.legend(loc='upper left')
+        ax2 = ax1.twinx()
+        if 'accuracy' in hist:
+            ax2.plot(hist['accuracy'], color='g', label='Train Acc', linestyle='dashed')
+        if 'val_accuracy' in hist:
+            ax2.plot(hist['val_accuracy'], color='r', label='Val Acc', linestyle='dashed')
+        ax2.set_ylabel('Accuracy')
+        lines, labels = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax2.legend(lines + lines2, labels + labels2, loc='upper right')
+        plt.title('Training History')
+        plt.tight_layout()
+        plt.show()
 
     def apply_loss_settings(self):
         """Apply selected loss function settings"""
@@ -746,8 +949,9 @@ class MLCourseGUI(QMainWindow):
                 # Handle classification loss settings
                 if loss_func == "Cross Entropy":
                     self.current_loss = "categorical_crossentropy"
-                    self.y_train = tf.keras.utils.to_categorical(self.y_train)
-                    self.y_test = tf.keras.utils.to_categorical(self.y_test)
+                    if self.y_train.ndim == 1:
+                        self.y_train = tf.keras.utils.to_categorical(self.y_train)
+                        self.y_test = tf.keras.utils.to_categorical(self.y_test)
                 elif loss_func == "Binary Cross Entropy":
                     self.current_loss = "binary_crossentropy"
                 elif loss_func == "Hinge Loss":
@@ -801,10 +1005,12 @@ class MLCourseGUI(QMainWindow):
         tabs = [
             ("Classical ML", self.create_classical_ml_tab),
             ("Deep Learning", self.create_deep_learning_tab),
+            ("Advanced Deep Learning", self.create_advanced_deep_learning_tab),
             ("Dimensionality Reduction", self.create_dim_reduction_tab),
             ("Reinforcement Learning", self.create_rl_tab),
             ("Advanced Dim Reduction", self.create_advanced_dim_reduction_tab),
-            ("Feature Extraction", self.create_feature_extraction_tab)
+            ("Feature Extraction", self.create_feature_extraction_tab),
+            ("GAN", self.create_gan_tab)  # Add GAN tab
         ]
         
         for tab_name, create_func in tabs:
@@ -1274,10 +1480,16 @@ class MLCourseGUI(QMainWindow):
             elif layer_type == "Dropout":
                 model.add(layers.Dropout(**params))
         
-        # Add output layer based on number of classes
-        num_classes = len(np.unique(self.y_train))
+        # Ensure flatten before Dense if Conv2D exists and no flatten yet
+        if any(isinstance(layer, layers.Conv2D) for layer in model.layers):
+            if not any(isinstance(layer, layers.Flatten) for layer in model.layers):
+                model.add(layers.Flatten())
+        # Add output layer based on number of classes inferred from target shape
+        if isinstance(self.y_train, np.ndarray) and self.y_train.ndim > 1:
+            num_classes = self.y_train.shape[1]
+        else:
+            num_classes = len(np.unique(self.y_train))
         model.add(layers.Dense(num_classes, activation='softmax'))
-                
         return model
 
     def create_progress_callback(self):
@@ -1289,7 +1501,9 @@ class MLCourseGUI(QMainWindow):
                 
             def on_epoch_end(self, epoch, logs=None):
                 progress = int(((epoch + 1) / self.params['epochs']) * 100)
+                QApplication.processEvents()  # Process pending events
                 self.progress_bar.setValue(progress)
+                QApplication.processEvents()  # Process pending events
                 
         return ProgressCallback(self.progress_bar)
         
@@ -1699,6 +1913,723 @@ class MLCourseGUI(QMainWindow):
             return 0.6, 0.2, 0.2
         else:
             return 0.8, 0.0, 0.2
+
+    def create_advanced_deep_learning_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        # Layer configuration
+        layers_group = QGroupBox("Layer Configuration")
+        layers_layout = QVBoxLayout()
+        self.adv_layers_list = QListWidget()
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton("Add Layer")
+        remove_btn = QPushButton("Remove Layer")
+        add_btn.clicked.connect(self.add_layer_dialog)
+        remove_btn.clicked.connect(lambda: self.adv_layers_list.takeItem(self.adv_layers_list.currentRow()))
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(remove_btn)
+        layers_layout.addWidget(self.adv_layers_list)
+        layers_layout.addLayout(btn_layout)
+        layers_group.setLayout(layers_layout)
+        layout.addWidget(layers_group)
+        # Model I/O
+        io_group = QGroupBox("Model I/O")
+        io_layout = QHBoxLayout()
+        save_btn = QPushButton("Save Model")
+        load_btn = QPushButton("Load Model")
+        save_btn.clicked.connect(self.save_model)
+        load_btn.clicked.connect(self.load_model)
+        io_layout.addWidget(save_btn)
+        io_layout.addWidget(load_btn)
+        io_group.setLayout(io_layout)
+        layout.addWidget(io_group)
+        # Optimizer / LR Schedule
+        opt_group = QGroupBox("Optimizer / LR Schedule")
+        opt_layout = QHBoxLayout()
+        self.optim_combo = QComboBox()
+        self.optim_combo.addItems(["Adam", "SGD", "RMSprop"])
+        self.lr_sched_combo = QComboBox()
+        self.lr_sched_combo.addItems(["None", "Step Decay", "Exponential"])
+        opt_layout.addWidget(QLabel("Optimizer:"))
+        opt_layout.addWidget(self.optim_combo)
+        opt_layout.addWidget(QLabel("LR Schedule:"))
+        opt_layout.addWidget(self.lr_sched_combo)
+        opt_group.setLayout(opt_layout)
+        layout.addWidget(opt_group)
+        # Regularization
+        reg_group = QGroupBox("Regularization")
+        reg_layout = QHBoxLayout()
+        self.dropout_spin = QDoubleSpinBox()
+        self.dropout_spin.setRange(0.0, 1.0)
+        self.dropout_spin.setSingleStep(0.1)
+        self.l2_spin = QDoubleSpinBox()
+        self.l2_spin.setRange(0.0, 1.0)
+        self.l2_spin.setSingleStep(0.001)
+        reg_layout.addWidget(QLabel("Dropout:"))
+        reg_layout.addWidget(self.dropout_spin)
+        reg_layout.addWidget(QLabel("L2:"))
+        reg_layout.addWidget(self.l2_spin)
+        reg_group.setLayout(reg_layout)
+        layout.addWidget(reg_group)
+        # Image Augmentation
+        aug_group = QGroupBox("Image Augmentation")
+        aug_layout = QHBoxLayout()
+        self.aug_rot = QDoubleSpinBox()
+        self.aug_rot.setRange(0, 180)
+        self.aug_rot.setSingleStep(1)
+        self.aug_flip = QCheckBox("Flip")
+        self.aug_zoom = QDoubleSpinBox()
+        self.aug_zoom.setRange(1.0, 3.0)
+        self.aug_zoom.setSingleStep(0.1)
+        aug_layout.addWidget(QLabel("Rotation:"))
+        aug_layout.addWidget(self.aug_rot)
+        aug_layout.addWidget(self.aug_flip)
+        aug_layout.addWidget(QLabel("Zoom:"))
+        aug_layout.addWidget(self.aug_zoom)
+        aug_group.setLayout(aug_layout)
+        layout.addWidget(aug_group)
+        # Pre-trained Model
+        pre_group = QGroupBox("Pre-trained Model")
+        pre_layout = QHBoxLayout()
+        self.pre_combo = QComboBox()
+        self.pre_combo.addItems(["None", "VGG16", "ResNet50"])
+        self.ft_check = QCheckBox("Fine-tune")
+        pre_layout.addWidget(self.pre_combo)
+        pre_layout.addWidget(self.ft_check)
+        pre_group.setLayout(pre_layout)
+        layout.addWidget(pre_group)
+        # Training Controls
+        ctrl_layout = QHBoxLayout()
+        train_btn2 = QPushButton("Train")
+        eval_btn = QPushButton("Evaluate")
+        curves_btn = QPushButton("Plot Curves")
+        grad_btn = QPushButton("Plot Gradients")
+        train_btn2.clicked.connect(self.train_advanced_model)
+        eval_btn.clicked.connect(self.evaluate_advanced_model)
+        curves_btn.clicked.connect(self.plot_training_curves)
+        grad_btn.clicked.connect(self.plot_gradient_histograms)
+        ctrl_layout.addWidget(train_btn2)
+        ctrl_layout.addWidget(eval_btn)
+        ctrl_layout.addWidget(curves_btn)
+        ctrl_layout.addWidget(grad_btn)
+        layout.addLayout(ctrl_layout)
+        return widget
+
+    def save_model(self):
+        """Save the current model architecture and weights"""
+        if self.current_model is None:
+            self.show_error("No model to save!")
+            return
+            
+        try:
+            file_name, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Model",
+                "",
+                "HDF5 files (*.h5);;JSON files (*.json)"
+            )
+            
+            if file_name:
+                if file_name.endswith('.h5'):
+                    self.current_model.save(file_name)
+                elif file_name.endswith('.json'):
+                    model_json = self.current_model.to_json()
+                    with open(file_name, 'w') as f:
+                        f.write(model_json)
+                self.status_bar.showMessage(f"Model saved to {file_name}")
+        except Exception as e:
+            self.show_error(f"Error saving model: {str(e)}")
+
+    def load_model(self):
+        """Load a saved model"""
+        try:
+            file_name, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load Model",
+                "",
+                "HDF5 files (*.h5);;JSON files (*.json)"
+            )
+            
+            if file_name:
+                if file_name.endswith('.h5'):
+                    self.current_model = models.load_model(file_name)
+                elif file_name.endswith('.json'):
+                    with open(file_name, 'r') as f:
+                        model_json = f.read()
+                    self.current_model = models.model_from_json(model_json)
+                self.status_bar.showMessage(f"Model loaded from {file_name}")
+        except Exception as e:
+            self.show_error(f"Error loading model: {str(e)}")
+
+    def train_advanced_model(self):
+        """Train the model with advanced settings"""
+        if self.X_train is None or self.y_train is None:
+            self.show_error("Please load data first!")
+            return
+            
+        try:
+            # Create model if not exists
+            if self.current_model is None:
+                self.current_model = self.create_neural_network()
+            
+            # Get optimizer settings
+            optimizer_name = self.optim_combo.currentText()
+            lr = self.lr_spin.value()
+            
+            if optimizer_name == "Adam":
+                optimizer = optimizers.Adam(learning_rate=lr)
+            elif optimizer_name == "SGD":
+                optimizer = optimizers.SGD(learning_rate=lr)
+            elif optimizer_name == "RMSprop":
+                optimizer = optimizers.RMSprop(learning_rate=lr)
+            
+            # Get learning rate schedule
+            lr_schedule = self.lr_sched_combo.currentText()
+            if lr_schedule == "Step Decay":
+                lr_schedule = optimizers.schedules.ExponentialDecay(
+                    initial_learning_rate=lr,
+                    decay_steps=1000,
+                    decay_rate=0.9
+                )
+                optimizer = optimizers.Adam(learning_rate=lr_schedule)
+            elif lr_schedule == "Exponential":
+                lr_schedule = optimizers.schedules.ExponentialDecay(
+                    initial_learning_rate=lr,
+                    decay_steps=1000,
+                    decay_rate=0.9
+                )
+                optimizer = optimizers.Adam(learning_rate=lr_schedule)
+            
+            # Compile model
+            self.current_model.compile(
+                optimizer=optimizer,
+                loss=self.current_loss,
+                metrics=['accuracy'] if self.current_loss in [
+                    'categorical_crossentropy', 
+                    'binary_crossentropy', 
+                    'hinge'
+                ] else ['mse', 'mae']
+            )
+            
+            # Create callbacks
+            callbacks = []
+            
+            # Add progress callback
+            class ProgressCallback(tf.keras.callbacks.Callback):
+                def __init__(self, progress_bar):
+                    super().__init__()
+                    self.progress_bar = progress_bar
+                    
+                def on_epoch_end(self, epoch, logs=None):
+                    progress = int(((epoch + 1) / self.params['epochs']) * 100)
+                    QApplication.processEvents()  # Process pending events
+                    self.progress_bar.setValue(progress)
+                    QApplication.processEvents()  # Process pending events
+            
+            callbacks.append(ProgressCallback(self.progress_bar))
+            
+            # Add early stopping
+            callbacks.append(tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=5,
+                restore_best_weights=True
+            ))
+            
+            # Train model
+            history = self.current_model.fit(
+                self.X_train, self.y_train,
+                batch_size=self.batch_size_spin.value(),
+                epochs=self.epochs_spin.value(),
+                validation_split=0.2,
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            self.training_history = history.history
+            self.status_bar.showMessage("Training complete!")
+            self.progress_bar.setValue(100)  # Ensure progress bar reaches 100%
+            QApplication.processEvents()  # Process pending events
+            
+        except Exception as e:
+            self.show_error(f"Error training model: {str(e)}")
+            logger.error(f"Training error: {str(e)}")
+            self.progress_bar.setValue(0)  # Reset progress bar on error
+            QApplication.processEvents()  # Process pending events
+
+    def evaluate_advanced_model(self):
+        """Evaluate the model on test data"""
+        if self.current_model is None:
+            self.show_error("No model to evaluate!")
+            return
+            
+        try:
+            # Get predictions
+            y_pred = self.current_model.predict(self.X_test)
+            
+            # Calculate metrics
+            if len(np.unique(self.y_test)) <= 10:  # Classification
+                from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+                y_pred_classes = np.argmax(y_pred, axis=1) if y_pred.ndim > 1 else y_pred
+                y_test_classes = np.argmax(self.y_test, axis=1) if self.y_test.ndim > 1 else self.y_test
+                
+                accuracy = accuracy_score(y_test_classes, y_pred_classes)
+                f1 = f1_score(y_test_classes, y_pred_classes, average='weighted')
+                conf_matrix = confusion_matrix(y_test_classes, y_pred_classes)
+                
+                # Show results
+                msg = f"Test Accuracy: {accuracy:.4f}\nF1 Score: {f1:.4f}\n\nConfusion Matrix:\n{conf_matrix}"
+                QMessageBox.information(self, "Evaluation Results", msg)
+            else:  # Regression
+                from sklearn.metrics import mean_squared_error, r2_score
+                mse = mean_squared_error(self.y_test, y_pred)
+                r2 = r2_score(self.y_test, y_pred)
+                
+                msg = f"Test MSE: {mse:.4f}\nR² Score: {r2:.4f}"
+                QMessageBox.information(self, "Evaluation Results", msg)
+                
+        except Exception as e:
+            self.show_error(f"Error evaluating model: {str(e)}")
+
+    def plot_training_curves(self):
+        """Plot training and validation curves"""
+        if not hasattr(self, 'training_history'):
+            self.show_error("No training history available!")
+            return
+            
+        try:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+            
+            # Plot loss
+            ax1.plot(self.training_history['loss'], label='Training Loss')
+            if 'val_loss' in self.training_history:
+                ax1.plot(self.training_history['val_loss'], label='Validation Loss')
+            ax1.set_title('Loss Curves')
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Loss')
+            ax1.legend()
+            
+            # Plot accuracy/metrics
+            if 'accuracy' in self.training_history:
+                ax2.plot(self.training_history['accuracy'], label='Training Accuracy')
+                if 'val_accuracy' in self.training_history:
+                    ax2.plot(self.training_history['val_accuracy'], label='Validation Accuracy')
+                ax2.set_title('Accuracy Curves')
+                ax2.set_xlabel('Epoch')
+                ax2.set_ylabel('Accuracy')
+            else:
+                ax2.plot(self.training_history['mse'], label='Training MSE')
+                if 'val_mse' in self.training_history:
+                    ax2.plot(self.training_history['val_mse'], label='Validation MSE')
+                ax2.set_title('MSE Curves')
+                ax2.set_xlabel('Epoch')
+                ax2.set_ylabel('MSE')
+            ax2.legend()
+            
+            plt.tight_layout()
+            plt.show()
+            
+        except Exception as e:
+            self.show_error(f"Error plotting training curves: {str(e)}")
+
+    def plot_gradient_histograms(self):
+        """Plot histograms of weight gradients during training"""
+        if self.current_model is None:
+            self.show_error("No model available!")
+            return
+            
+        try:
+            # Get gradients for each layer
+            gradients = []
+            layer_names = []
+            
+            for layer in self.current_model.layers:
+                if layer.trainable_weights:
+                    weights = layer.get_weights()
+                    if weights:
+                        gradients.extend([w.flatten() for w in weights])
+                        layer_names.extend([f"{layer.name} - {i}" for i in range(len(weights))])
+            
+            # Plot histograms
+            n_layers = len(gradients)
+            n_cols = min(3, n_layers)
+            n_rows = (n_layers + n_cols - 1) // n_cols
+            
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4*n_rows))
+            axes = axes.flatten()
+            
+            for i, (grad, name) in enumerate(zip(gradients, layer_names)):
+                if i < len(axes):
+                    axes[i].hist(grad, bins=50)
+                    axes[i].set_title(f"Gradients: {name}")
+                    axes[i].set_xlabel("Gradient Value")
+                    axes[i].set_ylabel("Frequency")
+            
+            # Hide empty subplots
+            for i in range(len(gradients), len(axes)):
+                axes[i].set_visible(False)
+            
+            plt.tight_layout()
+            plt.show()
+            
+        except Exception as e:
+            self.show_error(f"Error plotting gradient histograms: {str(e)}")
+
+    # GAN Models
+    class Generator(tf.keras.Model):
+        def __init__(self, latent_dim, output_dim):
+            super(Generator, self).__init__()
+            self.model = tf.keras.Sequential([
+                layers.Dense(256, use_bias=False, input_shape=(latent_dim,)),
+                layers.BatchNormalization(),
+                layers.LeakyReLU(),
+                layers.Dense(512),
+                layers.BatchNormalization(),
+                layers.LeakyReLU(),
+                layers.Dense(1024),
+                layers.BatchNormalization(),
+                layers.LeakyReLU(),
+                layers.Dense(output_dim, activation='tanh')
+            ])
+
+        def call(self, inputs):
+            return self.model(inputs)
+
+    class Discriminator(tf.keras.Model):
+        def __init__(self, input_dim):
+            super(Discriminator, self).__init__()
+            self.model = tf.keras.Sequential([
+                layers.Dense(512, input_shape=(input_dim,)),
+                layers.LeakyReLU(),
+                layers.Dropout(0.3),
+                layers.Dense(256),
+                layers.LeakyReLU(),
+                layers.Dropout(0.3),
+                layers.Dense(1, activation='sigmoid')
+            ])
+
+    def call(self, inputs):
+        return self.model(inputs)
+
+class GANTrainingThread(QThread):
+    progress_updated = pyqtSignal(int)
+    training_log = pyqtSignal(str)
+    training_finished = pyqtSignal()
+
+    def __init__(self, generator, discriminator, dataset, latent_dim, num_epochs, batch_size):
+        super().__init__()
+        self.generator = generator
+        self.discriminator = discriminator
+        self.dataset = dataset
+        self.latent_dim = latent_dim
+        self.num_epochs = num_epochs
+        self.batch_size = batch_size
+        self.is_running = True
+
+    def stop(self):
+        self.is_running = False
+
+    def run(self):
+        # Optimizers
+        g_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
+        d_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
+
+        # Loss function
+        cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+
+        for epoch in range(self.num_epochs):
+            if not self.is_running:
+                break
+
+            for batch_idx, batch in enumerate(self.dataset):
+                if not self.is_running:
+                    break
+                batch_size = tf.shape(batch)[0]
+
+                # Train Discriminator
+                with tf.GradientTape() as d_tape:
+                    # Generate fake data
+                    noise = tf.random.normal([batch_size, self.latent_dim])
+                    generated_data = self.generator(noise, training=False)
+
+                    # Get discriminator outputs
+                    real_output = self.discriminator(batch, training=True)
+                    fake_output = self.discriminator(generated_data, training=True)
+
+                    # Calculate losses
+                    d_loss_real = cross_entropy(tf.ones_like(real_output), real_output)
+                    d_loss_fake = cross_entropy(tf.zeros_like(fake_output), fake_output)
+                    d_loss = d_loss_real + d_loss_fake
+
+                # Update discriminator
+                d_gradients = d_tape.gradient(d_loss, self.discriminator.trainable_variables)
+                d_optimizer.apply_gradients(zip(d_gradients, self.discriminator.trainable_variables))
+
+                # Train Generator
+                with tf.GradientTape() as g_tape:
+                    # Generate fake data
+                    noise = tf.random.normal([batch_size, self.latent_dim])
+                    generated_data = self.generator(noise, training=True)
+                    fake_output = self.discriminator(generated_data, training=False)
+
+                    # Calculate loss
+                    g_loss = cross_entropy(tf.ones_like(fake_output), fake_output)
+
+                # Update generator
+                g_gradients = g_tape.gradient(g_loss, self.generator.trainable_variables)
+                g_optimizer.apply_gradients(zip(g_gradients, self.generator.trainable_variables))
+
+                # Log progress
+                if batch_idx % 100 == 0:
+                    log_msg = f'Epoch [{epoch}/{self.num_epochs}] Batch [{batch_idx}] ' \
+                             f'D_loss: {d_loss:.4f} G_loss: {g_loss:.4f}'
+                    self.training_log.emit(log_msg)
+                    logger.info(log_msg)
+
+            progress = int((epoch + 1) / self.num_epochs * 100)
+            self.progress_updated.emit(progress)
+
+
+    def create_gan_tab(self):
+        """Create the GAN tab with training controls and visualization"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # GAN Configuration
+        config_group = QGroupBox("GAN Configuration")
+        config_layout = QGridLayout()
+
+        # Latent dimension
+        config_layout.addWidget(QLabel("Latent Dimension:"), 0, 0)
+        self.latent_dim_spin = QSpinBox()
+        self.latent_dim_spin.setRange(10, 1000)
+        self.latent_dim_spin.setValue(100)
+        config_layout.addWidget(self.latent_dim_spin, 0, 1)
+
+        # Number of epochs
+        config_layout.addWidget(QLabel("Epochs:"), 1, 0)
+        self.gan_epochs_spin = QSpinBox()
+        self.gan_epochs_spin.setRange(1, 1000)
+        self.gan_epochs_spin.setValue(100)
+        config_layout.addWidget(self.gan_epochs_spin, 1, 1)
+
+        # Batch size
+        config_layout.addWidget(QLabel("Batch Size:"), 2, 0)
+        self.gan_batch_size_spin = QSpinBox()
+        self.gan_batch_size_spin.setRange(1, 1000)
+        self.gan_batch_size_spin.setValue(64)
+        config_layout.addWidget(self.gan_batch_size_spin, 2, 1)
+
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
+
+        # Training Controls
+        controls_group = QGroupBox("Training Controls")
+        controls_layout = QHBoxLayout()
+
+        self.train_gan_btn = QPushButton("Train GAN")
+        self.train_gan_btn.clicked.connect(self.start_gan_training)
+        controls_layout.addWidget(self.train_gan_btn)
+
+        self.stop_gan_btn = QPushButton("Stop Training")
+        self.stop_gan_btn.clicked.connect(self.stop_gan_training)
+        self.stop_gan_btn.setEnabled(False)
+        controls_layout.addWidget(self.stop_gan_btn)
+
+        controls_group.setLayout(controls_layout)
+        layout.addWidget(controls_group)
+
+        # Training Log
+        log_group = QGroupBox("Training Log")
+        log_layout = QVBoxLayout()
+        self.gan_log_text = QTextEdit()
+        self.gan_log_text.setReadOnly(True)
+        log_layout.addWidget(self.gan_log_text)
+        log_group.setLayout(log_layout)
+        layout.addWidget(log_group)
+
+        # Visualization
+        viz_group = QGroupBox("Generated Samples")
+        viz_layout = QVBoxLayout()
+        self.gan_figure = plt.figure(figsize=(6, 4))
+        self.gan_canvas = FigureCanvas(self.gan_figure)
+        viz_layout.addWidget(self.gan_canvas)
+        viz_group.setLayout(viz_layout)
+        layout.addWidget(viz_group)
+
+        return widget
+
+    def start_gan_training(self):
+        """Start GAN training"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+
+        try:
+            # Initialize models
+            input_dim = self.X_train.shape[1]
+            latent_dim = self.latent_dim_spin.value()
+            # Create generator and discriminator instances
+            self.generator = Generator(latent_dim, input_dim)
+            self.discriminator = Discriminator(input_dim)
+            # Prepare data
+            dataset = tf.data.Dataset.from_tensor_slices(self.X_train)
+            # Start training thread
+            self.gan_thread = MLCourseGUI.GANTrainingThread(
+                self.generator,
+                self.discriminator,
+                dataset,
+                latent_dim,
+                self.gan_epochs_spin.value(),
+                self.gan_batch_size_spin.value()
+            )
+            self.gan_thread.progress_updated.connect(self.update_gan_progress)
+            self.gan_thread.training_log.connect(self.update_gan_log)
+            self.gan_thread.training_finished.connect(self.gan_training_finished)
+            self.train_gan_btn.setEnabled(False)
+            self.stop_gan_btn.setEnabled(True)
+            self.gan_thread.start()
+        except Exception as e:
+            self.show_error(f"Error starting GAN training: {str(e)}")
+            logger.error(f"GAN training error: {str(e)}")
+
+    def stop_gan_training(self):
+        """Stop GAN training"""
+        if hasattr(self, 'gan_thread'):
+            self.gan_thread.stop()
+            self.gan_thread.wait()
+            self.gan_training_finished()
+
+    def update_gan_progress(self, value):
+        """Update progress bar during GAN training"""
+        self.progress_bar.setValue(value)
+
+    def update_gan_log(self, message):
+        """Update training log during GAN training"""
+        self.gan_log_text.append(message)
+        logger.info(message)
+
+    def gan_training_finished(self):
+        """Handle GAN training completion"""
+        self.train_gan_btn.setEnabled(True)
+        self.stop_gan_btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        # Generate and display samples
+        self.generate_gan_samples()
+
+    def generate_gan_samples(self):
+        """Generate and display samples from trained GAN"""
+        if not hasattr(self, 'generator'):
+            return
+        try:
+            # Generate samples
+            noise = tf.random.normal([16, self.latent_dim_spin.value()])
+            samples = self.generator(noise, training=False).numpy()
+            # Visualize samples
+            self.gan_figure.clear()
+            ax = self.gan_figure.add_subplot(111)
+            if samples.shape[1] > 2:
+                # Use PCA for visualization if data is high-dimensional
+                pca = PCA(n_components=2)
+                samples_2d = pca.fit_transform(samples)
+                ax.scatter(samples_2d[:, 0], samples_2d[:, 1])
+                ax.set_title("Generated Samples (PCA projection)")
+            else:
+                ax.scatter(samples[:, 0], samples[:, 1])
+                ax.set_title("Generated Samples")
+            self.gan_canvas.draw()
+        except Exception as e:
+            self.show_error(f"Error generating samples: {str(e)}")
+            logger.error(f"Sample generation error: {str(e)}")
+
+
+        try:
+            # Initialize models
+            input_dim = self.X_train.shape[1]
+            latent_dim = self.latent_dim_spin.value()
+            
+            # Create generator and discriminator instances
+            self.generator = Generator(latent_dim, input_dim)
+            self.discriminator = Discriminator(input_dim)
+
+            # Prepare data
+            dataset = tf.data.Dataset.from_tensor_slices(self.X_train)
+
+            # Start training thread
+            self.gan_thread = MLCourseGUI.GANTrainingThread(
+                self.generator,
+                self.discriminator,
+                dataset,
+                latent_dim,
+                self.gan_epochs_spin.value(),
+                self.gan_batch_size_spin.value()
+            )
+
+            self.gan_thread.progress_updated.connect(self.update_gan_progress)
+            self.gan_thread.training_log.connect(self.update_gan_log)
+            self.gan_thread.training_finished.connect(self.gan_training_finished)
+
+            self.train_gan_btn.setEnabled(False)
+            self.stop_gan_btn.setEnabled(True)
+            self.gan_thread.start()
+
+        except Exception as e:
+            self.show_error(f"Error starting GAN training: {str(e)}")
+            logger.error(f"GAN training error: {str(e)}")
+
+    def stop_gan_training(self):
+        """Stop GAN training"""
+        if hasattr(self, 'gan_thread'):
+            self.gan_thread.stop()
+            self.gan_thread.wait()
+            self.gan_training_finished()
+
+    def update_gan_progress(self, value):
+        """Update progress bar during GAN training"""
+        self.progress_bar.setValue(value)
+
+    def update_gan_log(self, message):
+        """Update training log during GAN training"""
+        self.gan_log_text.append(message)
+        logger.info(message)
+
+    def gan_training_finished(self):
+        """Handle GAN training completion"""
+        self.train_gan_btn.setEnabled(True)
+        self.stop_gan_btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        
+        # Generate and display samples
+        self.generate_gan_samples()
+
+    def generate_gan_samples(self):
+        """Generate and display samples from trained GAN"""
+        if not hasattr(self, 'generator'):
+            return
+
+        try:
+            # Generate samples
+            noise = tf.random.normal([16, self.latent_dim_spin.value()])
+            samples = self.generator(noise, training=False).numpy()
+
+            # Visualize samples
+            self.gan_figure.clear()
+            ax = self.gan_figure.add_subplot(111)
+            
+            if samples.shape[1] > 2:
+                # Use PCA for visualization if data is high-dimensional
+                pca = PCA(n_components=2)
+                samples_2d = pca.fit_transform(samples)
+                ax.scatter(samples_2d[:, 0], samples_2d[:, 1])
+                ax.set_title("Generated Samples (PCA projection)")
+            else:
+                ax.scatter(samples[:, 0], samples[:, 1])
+                ax.set_title("Generated Samples")
+
+            self.gan_canvas.draw()
+            
+        except Exception as e:
+            self.show_error(f"Error generating samples: {str(e)}")
+            logger.error(f"Sample generation error: {str(e)}")
 
 class PlotDialog(QDialog):
     def __init__(self, fig, title="Plot", metrics=None, parent=None):
