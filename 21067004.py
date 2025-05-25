@@ -132,6 +132,7 @@ class MLCourseGUI(QMainWindow):
 
     def create_gan_tab(self):
         widget = QWidget()
+        
         layout = QVBoxLayout(widget)
 
         # GAN Configuration
@@ -245,6 +246,7 @@ class MLCourseGUI(QMainWindow):
     def create_data_section(self):
         """Create the data management section"""
         data_group = QGroupBox("Data Management")
+        data_group.setStyleSheet("background-color : lightblue;")
         data_group.setMaximumHeight(250)  # Reduced vertical height
         layout = QHBoxLayout()
         
@@ -404,6 +406,7 @@ class MLCourseGUI(QMainWindow):
     def create_visualization(self):
         """Create the visualization section"""
         viz_group = QGroupBox("Visualization")
+        viz_group.setStyleSheet("background-color: lightyellow;")
         layout = QHBoxLayout()  # Changed back to HBox for side-by-side plots
         
         # Left side: Raw data plot with axis selection
@@ -1000,7 +1003,7 @@ class MLCourseGUI(QMainWindow):
     def create_tabs(self):
         """Create tabs for different ML topics"""
         self.tab_widget = QTabWidget()
-        
+        self.tab_widget.setStyleSheet("background-color: #FFC0CB;")
         # Create individual tabs
         tabs = [
             ("Classical ML", self.create_classical_ml_tab),
